@@ -134,7 +134,7 @@ app.post('/internal/sale', async (req, res) => {
     try {
         const timestamp = Date.now();
         const newSale = new SaleModel({
-            ...req.body, // Captures merchantId, terminalId, posDeviceId, shortOrderId, amount
+            ...req.body,
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
@@ -162,8 +162,6 @@ app.post('/v1/sale-request', async (req, res) => {
         });
 
         await newSale.save();
-        
-        // Return structured response
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
         res.status(500).json({ code: "FAILED", message: e.message });
