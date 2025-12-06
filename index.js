@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 // ==========================================
 // CONFIGURATION FOR RENDER
 // ==========================================
-const PORT = process.env.PORT || 3000;  // Use environment PORT or default to 3000
+const PORT = process.env.PORT || 3000;
 
 
 mongoose.connect('mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis?retryWrites=true&w=majority&appName=Cluster0', {
@@ -31,14 +31,18 @@ const ConfigSchema = new mongoose.Schema({
 });
 const ConfigModel = mongoose.model('TerminalConfig', ConfigSchema);
 
+// UPDATED SALE SCHEMA
 const SaleSchema = new mongoose.Schema({
     merchantId: String,
     terminalId: String,
-    shortOrderId: String,
-    posDeviceId: String,
+    posDeviceId: String,   
+    shortOrderId: String,  
     amount: Number,
+    allowedInstruments: [String],
+    autoAccept: { type: Boolean, default: true },
     transactionId: String,
     createdAt: String,
+    creationTimestamp: Number, 
     status: String,
     invoiceNumber: String
 });
@@ -66,9 +70,6 @@ const VerificationSchema = new mongoose.Schema({
 });
 const VerificationModel = mongoose.model('Verification', VerificationSchema);
 
-// ==========================================
-// MERGED ROUTES (SOURCE + MAIN API)
-// ==========================================
 
 // REGISTER/GET CONFIG
 app.post('/internal/config', async (req, res) => {
@@ -111,41 +112,68 @@ app.get('/v1/terminal/:mid/:tid/allow-void', async (req, res) => {
     res.json({ allow: req.query.invoiceNumber !== "0000" });
 });
 
-// SALE REQUEST
+const createSaleResponse = (saleData) => {
+    return {
+        code: "SUCCESS",
+        message: "Sale Saved Successfully",
+        merchantId: saleData.merchantId,
+        terminalId: saleData.terminalId,
+        posDeviceId: saleData.posDeviceId,  
+        shortOrderId: saleData.shortOrderId,
+        amount: saleData.amount,
+        transactionId: saleData.transactionId,
+        autoAccept: saleData.autoAccept,
+        allowedInstruments: saleData.allowedInstruments,
+        creationTimestamp: saleData.creationTimestamp,
+        createdAt: saleData.createdAt,
+        data: saleData
+    };
+};
+
 app.post('/internal/sale', async (req, res) => {
-    const newSale = new SaleModel({
-        ...req.body,
-        transactionId: "TXN_" + Date.now(),
-        createdAt: new Date().toISOString(),
-        status: "SUCCESS"
-    });
+    try {
+        const timestamp = Date.now();
+        const newSale = new SaleModel({
+            ...req.body, // Captures merchantId, terminalId, posDeviceId, shortOrderId, amount
+            transactionId: "TXN_" + timestamp,
+            createdAt: new Date().toISOString(),
+            creationTimestamp: timestamp,
+            status: "SUCCESS"
+        });
 
-    await newSale.save();
-
-    res.json({
-        merchantId: newSale.merchantId,
-        terminalId: newSale.terminalId,
-        amount: newSale.amount,
-        autoAccept: true,
-        transactionId: newSale.transactionId,
-        code: "00",
-        message: "Sale Saved"
-    });
+        await newSale.save();
+        
+        // Return structured response
+        res.json(createSaleResponse(newSale.toObject()));
+    } catch (e) {
+        res.status(500).json({ code: "FAILED", message: e.message });
+    }
 });
 
 app.post('/v1/sale-request', async (req, res) => {
-    const newSale = new SaleModel({
-        ...req.body,
-        transactionId: "TXN_" + Date.now(),
-        createdAt: new Date().toISOString(),
-        status: "SUCCESS"
-    });
+    try {
+        const timestamp = Date.now();
+        const newSale = new SaleModel({
+            ...req.body,
+            transactionId: "TXN_" + timestamp,
+            createdAt: new Date().toISOString(),
+            creationTimestamp: timestamp,
+            status: "SUCCESS"
+        });
 
-    await newSale.save();
-    res.json(newSale);
+        await newSale.save();
+        
+        // Return structured response
+        res.json(createSaleResponse(newSale.toObject()));
+    } catch (e) {
+        res.status(500).json({ code: "FAILED", message: e.message });
+    }
 });
 
-// DEPLOY DEVICE
+// ==========================================
+// DEPLOY & OTP
+// ==========================================
+
 app.post('/internal/deploy', async (req, res) => {
     const newDeploy = new DeployModel({
         ...req.body,
