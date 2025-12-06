@@ -115,10 +115,78 @@ app.get('/v1/terminal/:mid/:tid/allow-void', async (req, res) => {
     res.json({ allow: req.query.invoiceNumber !== "0000" });
 });
 
+app.post('/internal/sale', async (req, res) => {
+    try {
+        console.log("🔹 Internal Sale: Saving Data...", req.body);
+
+        const timestamp = Date.now();
+        
+        // Create and Save the Sale
+        const newSale = new SaleModel({
+            ...req.body,
+            // Ensure amount is a number
+            amount: req.body.amount ? Number(req.body.amount) : 0,
+            transactionId: "TXN_" + timestamp,
+            createdAt: new Date().toISOString(),
+            creationTimestamp: timestamp,
+            status: "PENDING" // Mark as pending so the terminal can pick it up
+        });
+
+        await newSale.save();
+        
+        // Return the saved data
+        res.json(createSaleResponse(newSale.toObject()));
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ code: "FAILED", message: e.message });
+    }
+});
+
+// ==========================================
+// 2. V1 SALE REQUEST - FETCHES THE DATA
+// ==========================================
+app.post('/v1/sale-request', async (req, res) => {
+    try {
+        console.log("🔸 V1 Sale Request: Fetching latest sale for...", req.body);
+
+        // We need MerchantID and TerminalID to find the correct sale
+        const { merchantId, terminalId } = req.body;
+
+        if (!merchantId || !terminalId) {
+            return res.status(400).json({ 
+                code: "FAILED", 
+                message: "merchantId and terminalId are required to fetch sale" 
+            });
+        }
+
+        // FIND the latest sale for this terminal
+        // Sort by _id: -1 (Descending) to get the newest one
+        const latestSale = await SaleModel.findOne({ 
+            merchantId: merchantId, 
+            terminalId: terminalId 
+        }).sort({ _id: -1 });
+
+        if (!latestSale) {
+            return res.status(404).json({ 
+                code: "FAILED", 
+                message: "No sale found for this terminal" 
+            });
+        }
+
+        // Return the existing data from DB (which has amount 1.01)
+        res.json(createSaleResponse(latestSale.toObject()));
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ code: "FAILED", message: e.message });
+    }
+});
+
+// Helper function remains the same
 const createSaleResponse = (saleData) => {
     return {
         code: "SUCCESS",
-        message: "Sale Saved Successfully",
+        message: "Sale Fetch Successfully",
         merchantId: saleData.merchantId,
         terminalId: saleData.terminalId,
         posDeviceId: saleData.posDeviceId,
@@ -135,61 +203,6 @@ const createSaleResponse = (saleData) => {
         data: saleData
     };
 };
-
-// Helper to safely parse numbers
-const safeParseFloat = (val) => {
-    if (val === undefined || val === null || val === "") return 0;
-    const parsed = parseFloat(val);
-    return isNaN(parsed) ? 0 : parsed;
-};
-
-app.post('/internal/sale', async (req, res) => {
-    try {
-        console.log("🔹 Internal Sale Body:", req.body); // Check console for this log
-
-        const timestamp = Date.now();
-        const newSale = new SaleModel({
-            ...req.body,
-            // Safely parse amount. If missing, it becomes 0.
-            amount: safeParseFloat(req.body.amount),
-            
-            transactionId: "TXN_" + timestamp,
-            createdAt: new Date().toISOString(),
-            creationTimestamp: timestamp,
-            status: "SUCCESS"
-        });
-
-        await newSale.save();
-        res.json(createSaleResponse(newSale.toObject()));
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ code: "FAILED", message: e.message });
-    }
-});
-
-app.post('/v1/sale-request', async (req, res) => {
-    try {
-        console.log("🔸 V1 Sale Body:", req.body); // Check console for this log
-
-        const timestamp = Date.now();
-        
-        const newSale = new SaleModel({
-            ...req.body,
-            amount: safeParseFloat(req.body.amount),
-
-            transactionId: "TXN_" + timestamp,
-            createdAt: new Date().toISOString(),
-            creationTimestamp: timestamp,
-            status: "SUCCESS"
-        });
-
-        await newSale.save();
-        res.json(createSaleResponse(newSale.toObject()));
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ code: "FAILED", message: e.message });
-    }
-});
 
 // ==========================================
 // DEPLOY & OTP
