@@ -35,12 +35,12 @@ const SaleSchema = new mongoose.Schema({
     terminalId: String,
     posDeviceId: String,
     shortOrderId: String,
-    amount: { type: Number, default: 0.0 }, // Default to 0.0 so it appears in JSON
+    amount: { type: Number, default: 0.0 },
     allowedInstruments: [String],
     autoAccept: { type: Boolean, default: true },
-    autoAcceptWindowExpirySeconds: { type: Number, default: 0 }, // Added
-    pregeneratedDQRTransactionId: String,  // Added
-    pregeneratedCardTransactionId: String, // Added
+    autoAcceptWindowExpirySeconds: { type: Number, default: 0 },
+    pregeneratedDQRTransactionId: String,
+    pregeneratedCardTransactionId: String,
     
     // Server Generated / Status fields
     transactionId: String,
@@ -126,15 +126,19 @@ app.post('/internal/sale', async (req, res) => {
         const timestamp = Date.now();
         
         // 1. Delete old pending sales for this terminal to avoid confusion
+        // We use $or here too in case you send swapped IDs to the delete command
         await SaleModel.deleteMany({ 
-            merchantId: req.body.merchantId, 
-            terminalId: req.body.terminalId,
+            $or: [
+                { merchantId: req.body.merchantId, terminalId: req.body.terminalId },
+                { merchantId: req.body.terminalId, terminalId: req.body.merchantId }
+            ],
             status: "PENDING"
         });
 
         // 2. Create New Sale
         const newSale = new SaleModel({
             ...req.body,
+            // Ensure amount is a number and handled correctly
             amount: req.body.amount ? Number(req.body.amount) : 0,
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
@@ -172,24 +176,16 @@ app.post('/v1/sale-request', async (req, res) => {
             });
         }
 
-        // 3. Find the latest sale (Sorted by newest first)
+        // 3. SMART QUERY: Find the latest sale even if IDs are swapped
         const latestSale = await SaleModel.findOne({ 
-            merchantId: merchantId, 
-            terminalId: terminalId 
+            $or: [
+                { merchantId: merchantId, terminalId: terminalId }, // Exact Match
+                { merchantId: terminalId, terminalId: merchantId }  // Swapped Match
+            ]
         }).sort({ _id: -1 }); // Get the absolute newest record
 
         if (!latestSale) {
             console.log("❌ Database Query Result: NULL (No match found)");
-            
-            // DEBUG: Let's see what IS in the database to help you debug
-            const anySale = await SaleModel.findOne();
-            if(anySale) {
-                console.log("   (Debug) But I found THIS in DB (IDs might be different?):");
-                console.log(`   DB has: MID=${anySale.merchantId}, TID=${anySale.terminalId}`);
-            } else {
-                console.log("   (Debug) Database is totally empty.");
-            }
-
             return res.status(404).json({ 
                 code: "FAILED", 
                 message: "No sale found for this terminal" 
