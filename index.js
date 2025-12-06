@@ -115,26 +115,37 @@ app.get('/v1/terminal/:mid/:tid/allow-void', async (req, res) => {
     res.json({ allow: req.query.invoiceNumber !== "0000" });
 });
 
+// ==========================================
+// 1. INTERNAL API - SAVES THE DATA (Cloud Trigger)
+// ==========================================
 app.post('/internal/sale', async (req, res) => {
     try {
-        console.log("🔹 Internal Sale: Saving Data...", req.body);
+        console.log("------------------------------------------------");
+        console.log("🔹 INTERNAL SALE: Received Data:", req.body);
 
         const timestamp = Date.now();
         
-        // Create and Save the Sale
+        // 1. Delete old pending sales for this terminal to avoid confusion
+        await SaleModel.deleteMany({ 
+            merchantId: req.body.merchantId, 
+            terminalId: req.body.terminalId,
+            status: "PENDING"
+        });
+
+        // 2. Create New Sale
         const newSale = new SaleModel({
             ...req.body,
-            // Ensure amount is a number
             amount: req.body.amount ? Number(req.body.amount) : 0,
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
-            status: "PENDING" // Mark as pending so the terminal can pick it up
+            status: "PENDING" // Mark as PENDING so V1 knows this is the new one
         });
 
         await newSale.save();
+        console.log("✅ Data Saved to DB with ID:", newSale._id);
+        console.log("------------------------------------------------");
         
-        // Return the saved data
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
         console.error(e);
@@ -143,37 +154,52 @@ app.post('/internal/sale', async (req, res) => {
 });
 
 // ==========================================
-// 2. V1 SALE REQUEST - FETCHES THE DATA
+// 2. V1 SALE REQUEST - FETCHES THE DATA (POS Trigger)
 // ==========================================
 app.post('/v1/sale-request', async (req, res) => {
     try {
-        console.log("🔸 V1 Sale Request: Fetching latest sale for...", req.body);
+        console.log("------------------------------------------------");
+        console.log("🔸 V1 REQUEST: Looking for sale...");
+        console.log("   Input Body:", req.body);
 
-        // We need MerchantID and TerminalID to find the correct sale
         const { merchantId, terminalId } = req.body;
 
         if (!merchantId || !terminalId) {
+            console.log("❌ Missing merchantId or terminalId");
             return res.status(400).json({ 
                 code: "FAILED", 
-                message: "merchantId and terminalId are required to fetch sale" 
+                message: "merchantId and terminalId are required" 
             });
         }
 
-        // FIND the latest sale for this terminal
-        // Sort by _id: -1 (Descending) to get the newest one
+        // 3. Find the latest sale (Sorted by newest first)
         const latestSale = await SaleModel.findOne({ 
             merchantId: merchantId, 
             terminalId: terminalId 
-        }).sort({ _id: -1 });
+        }).sort({ _id: -1 }); // Get the absolute newest record
 
         if (!latestSale) {
+            console.log("❌ Database Query Result: NULL (No match found)");
+            
+            // DEBUG: Let's see what IS in the database to help you debug
+            const anySale = await SaleModel.findOne();
+            if(anySale) {
+                console.log("   (Debug) But I found THIS in DB (IDs might be different?):");
+                console.log(`   DB has: MID=${anySale.merchantId}, TID=${anySale.terminalId}`);
+            } else {
+                console.log("   (Debug) Database is totally empty.");
+            }
+
             return res.status(404).json({ 
                 code: "FAILED", 
                 message: "No sale found for this terminal" 
             });
         }
 
-        // Return the existing data from DB (which has amount 1.01)
+        console.log("✅ Found Sale:", latestSale._id, "| Amount:", latestSale.amount);
+        console.log("------------------------------------------------");
+
+        // 4. Return the data
         res.json(createSaleResponse(latestSale.toObject()));
 
     } catch (e) {
@@ -182,11 +208,11 @@ app.post('/v1/sale-request', async (req, res) => {
     }
 });
 
-// Helper function remains the same
+// Helper Function
 const createSaleResponse = (saleData) => {
     return {
         code: "SUCCESS",
-        message: "Sale Fetch Successfully",
+        message: "Sale Processed Successfully",
         merchantId: saleData.merchantId,
         terminalId: saleData.terminalId,
         posDeviceId: saleData.posDeviceId,
