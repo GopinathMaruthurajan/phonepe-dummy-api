@@ -115,43 +115,46 @@ app.get('/v1/terminal/:mid/:tid/allow-void', async (req, res) => {
     res.json({ allow: req.query.invoiceNumber !== "0000" });
 });
 
-// ==========================================
-// UPDATED SALE REQUESTS
-// ==========================================
-
-// Helper function to ensure ALL fields exist in response
 const createSaleResponse = (saleData) => {
     return {
         code: "SUCCESS",
         message: "Sale Saved Successfully",
-        
-        // Explicitly map all fields from Java Class
         merchantId: saleData.merchantId,
         terminalId: saleData.terminalId,
         posDeviceId: saleData.posDeviceId,
         shortOrderId: saleData.shortOrderId,
-        amount: saleData.amount,
+        amount: saleData.amount, // This will show what was saved in DB
         allowedInstruments: saleData.allowedInstruments || [],
         autoAccept: saleData.autoAccept,
-        
-        // These fields were missing previously:
         autoAcceptWindowExpirySeconds: saleData.autoAcceptWindowExpirySeconds,
         pregeneratedDQRTransactionId: saleData.pregeneratedDQRTransactionId,
         pregeneratedCardTransactionId: saleData.pregeneratedCardTransactionId,
-        
         transactionId: saleData.transactionId,
         creationTimestamp: saleData.creationTimestamp,
         createdAt: saleData.createdAt,
-
         data: saleData
     };
 };
 
 app.post('/internal/sale', async (req, res) => {
     try {
+        console.log("🔹 Internal Sale Request Body:", req.body); // DEBUG LOG
+
         const timestamp = Date.now();
         const newSale = new SaleModel({
-            ...req.body,
+            // Explicitly map fields to ensure they aren't missed
+            merchantId: req.body.merchantId,
+            terminalId: req.body.terminalId,
+            posDeviceId: req.body.posDeviceId,
+            shortOrderId: req.body.shortOrderId,
+            amount: Number(req.body.amount), // Force convert to Number
+            allowedInstruments: req.body.allowedInstruments,
+            autoAccept: req.body.autoAccept,
+            autoAcceptWindowExpirySeconds: req.body.autoAcceptWindowExpirySeconds,
+            pregeneratedDQRTransactionId: req.body.pregeneratedDQRTransactionId,
+            pregeneratedCardTransactionId: req.body.pregeneratedCardTransactionId,
+            
+            // System fields
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
@@ -161,15 +164,36 @@ app.post('/internal/sale', async (req, res) => {
         await newSale.save();
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
+        console.error("Sale Error:", e);
         res.status(500).json({ code: "FAILED", message: e.message });
     }
 });
 
 app.post('/v1/sale-request', async (req, res) => {
     try {
+        console.log("🔸 V1 Sale Request Body:", req.body); // DEBUG LOG
+
         const timestamp = Date.now();
+        
+        // Validation check
+        if (req.body.amount === undefined || req.body.amount === null) {
+            console.warn("⚠️ Warning: Amount is missing in request body");
+        }
+
         const newSale = new SaleModel({
-            ...req.body,
+            // Explicitly map fields
+            merchantId: req.body.merchantId,
+            terminalId: req.body.terminalId,
+            posDeviceId: req.body.posDeviceId,
+            shortOrderId: req.body.shortOrderId,
+            amount: Number(req.body.amount),
+            allowedInstruments: req.body.allowedInstruments,
+            autoAccept: req.body.autoAccept,
+            autoAcceptWindowExpirySeconds: req.body.autoAcceptWindowExpirySeconds,
+            pregeneratedDQRTransactionId: req.body.pregeneratedDQRTransactionId,
+            pregeneratedCardTransactionId: req.body.pregeneratedCardTransactionId,
+            
+            // System fields
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
@@ -179,6 +203,7 @@ app.post('/v1/sale-request', async (req, res) => {
         await newSale.save();
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
+        console.error("Sale Error:", e);
         res.status(500).json({ code: "FAILED", message: e.message });
     }
 });
