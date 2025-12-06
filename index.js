@@ -8,13 +8,10 @@ const mongoose = require('mongoose');
 // ==========================================
 const PORT = process.env.PORT || 3000;  // Use environment PORT or default to 3000
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis?retryWrites=true&w=majority';
 
-// MongoDB Connect with options to avoid deprecation warnings
-mongoose.connect(MONGO_URI, { 
-    useNewUrlParser: true, 
-    useUnifiedTopology: true 
-})
+mongoose.connect('mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis?retryWrites=true&w=majority&appName=Cluster0', {
+      dbName: 'phonepe_apis',
+  })
 .then(() => console.log('✅ Connected to MongoDB'))
 .catch(err => console.error('❌ DB Connection Error:', err));
 
