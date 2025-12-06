@@ -7,7 +7,7 @@ const mongoose = require('mongoose');
 // CONFIGURATION FOR RENDER
 // ==========================================
 const PORT = process.env.PORT || 3000;  // Render requires SINGLE PORT
-const MONGO_URI = 'mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis';
+const MONGO_URI = 'mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis?retryWrites=true&w=majority';
 
 // MongoDB Connect
 mongoose.connect(MONGO_URI)
