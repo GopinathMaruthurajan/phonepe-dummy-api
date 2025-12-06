@@ -123,7 +123,7 @@ const createSaleResponse = (saleData) => {
         terminalId: saleData.terminalId,
         posDeviceId: saleData.posDeviceId,
         shortOrderId: saleData.shortOrderId,
-        amount: saleData.amount, // This will show what was saved in DB
+        amount: saleData.amount, 
         allowedInstruments: saleData.allowedInstruments || [],
         autoAccept: saleData.autoAccept,
         autoAcceptWindowExpirySeconds: saleData.autoAcceptWindowExpirySeconds,
@@ -136,25 +136,23 @@ const createSaleResponse = (saleData) => {
     };
 };
 
+// Helper to safely parse numbers
+const safeParseFloat = (val) => {
+    if (val === undefined || val === null || val === "") return 0;
+    const parsed = parseFloat(val);
+    return isNaN(parsed) ? 0 : parsed;
+};
+
 app.post('/internal/sale', async (req, res) => {
     try {
-        console.log("🔹 Internal Sale Request Body:", req.body); // DEBUG LOG
+        console.log("🔹 Internal Sale Body:", req.body); // Check console for this log
 
         const timestamp = Date.now();
         const newSale = new SaleModel({
-            // Explicitly map fields to ensure they aren't missed
-            merchantId: req.body.merchantId,
-            terminalId: req.body.terminalId,
-            posDeviceId: req.body.posDeviceId,
-            shortOrderId: req.body.shortOrderId,
-            amount: Number(req.body.amount), // Force convert to Number
-            allowedInstruments: req.body.allowedInstruments,
-            autoAccept: req.body.autoAccept,
-            autoAcceptWindowExpirySeconds: req.body.autoAcceptWindowExpirySeconds,
-            pregeneratedDQRTransactionId: req.body.pregeneratedDQRTransactionId,
-            pregeneratedCardTransactionId: req.body.pregeneratedCardTransactionId,
+            ...req.body,
+            // Safely parse amount. If missing, it becomes 0.
+            amount: safeParseFloat(req.body.amount),
             
-            // System fields
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
@@ -164,36 +162,21 @@ app.post('/internal/sale', async (req, res) => {
         await newSale.save();
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
-        console.error("Sale Error:", e);
+        console.error(e);
         res.status(500).json({ code: "FAILED", message: e.message });
     }
 });
 
 app.post('/v1/sale-request', async (req, res) => {
     try {
-        console.log("🔸 V1 Sale Request Body:", req.body); // DEBUG LOG
+        console.log("🔸 V1 Sale Body:", req.body); // Check console for this log
 
         const timestamp = Date.now();
         
-        // Validation check
-        if (req.body.amount === undefined || req.body.amount === null) {
-            console.warn("⚠️ Warning: Amount is missing in request body");
-        }
-
         const newSale = new SaleModel({
-            // Explicitly map fields
-            merchantId: req.body.merchantId,
-            terminalId: req.body.terminalId,
-            posDeviceId: req.body.posDeviceId,
-            shortOrderId: req.body.shortOrderId,
-            amount: Number(req.body.amount),
-            allowedInstruments: req.body.allowedInstruments,
-            autoAccept: req.body.autoAccept,
-            autoAcceptWindowExpirySeconds: req.body.autoAcceptWindowExpirySeconds,
-            pregeneratedDQRTransactionId: req.body.pregeneratedDQRTransactionId,
-            pregeneratedCardTransactionId: req.body.pregeneratedCardTransactionId,
-            
-            // System fields
+            ...req.body,
+            amount: safeParseFloat(req.body.amount),
+
             transactionId: "TXN_" + timestamp,
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
@@ -203,7 +186,7 @@ app.post('/v1/sale-request', async (req, res) => {
         await newSale.save();
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
-        console.error("Sale Error:", e);
+        console.error(e);
         res.status(500).json({ code: "FAILED", message: e.message });
     }
 });
