@@ -8,7 +8,6 @@ const mongoose = require('mongoose');
 // ==========================================
 const PORT = process.env.PORT || 3000;
 
-
 mongoose.connect('mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis?retryWrites=true&w=majority&appName=Cluster0', {
       dbName: 'phonepe_apis',
   })
@@ -31,18 +30,22 @@ const ConfigSchema = new mongoose.Schema({
 });
 const ConfigModel = mongoose.model('TerminalConfig', ConfigSchema);
 
-// UPDATED SALE SCHEMA
 const SaleSchema = new mongoose.Schema({
     merchantId: String,
     terminalId: String,
-    posDeviceId: String,   
-    shortOrderId: String,  
-    amount: Number,
+    posDeviceId: String,
+    shortOrderId: String,
+    amount: { type: Number, default: 0.0 }, // Default to 0.0 so it appears in JSON
     allowedInstruments: [String],
     autoAccept: { type: Boolean, default: true },
+    autoAcceptWindowExpirySeconds: { type: Number, default: 0 }, // Added
+    pregeneratedDQRTransactionId: String,  // Added
+    pregeneratedCardTransactionId: String, // Added
+    
+    // Server Generated / Status fields
     transactionId: String,
     createdAt: String,
-    creationTimestamp: Number, 
+    creationTimestamp: Number,
     status: String,
     invoiceNumber: String
 });
@@ -70,6 +73,9 @@ const VerificationSchema = new mongoose.Schema({
 });
 const VerificationModel = mongoose.model('Verification', VerificationSchema);
 
+// ==========================================
+// MERGED ROUTES
+// ==========================================
 
 // REGISTER/GET CONFIG
 app.post('/internal/config', async (req, res) => {
@@ -90,14 +96,11 @@ app.post('/internal/config', async (req, res) => {
     res.json(config);
 });
 
-
-// MAIN API → CONFIG
 app.get('/v1/terminal/:mid/:tid/integrated-mode-config', async (req, res) => {
     const response = await ConfigModel.findOne({
         merchantId: req.params.mid,
         terminalId: req.params.tid
     });
-
     res.json(response || {});
 });
 
@@ -112,20 +115,34 @@ app.get('/v1/terminal/:mid/:tid/allow-void', async (req, res) => {
     res.json({ allow: req.query.invoiceNumber !== "0000" });
 });
 
+// ==========================================
+// UPDATED SALE REQUESTS
+// ==========================================
+
+// Helper function to ensure ALL fields exist in response
 const createSaleResponse = (saleData) => {
     return {
         code: "SUCCESS",
         message: "Sale Saved Successfully",
+        
+        // Explicitly map all fields from Java Class
         merchantId: saleData.merchantId,
         terminalId: saleData.terminalId,
-        posDeviceId: saleData.posDeviceId,  
+        posDeviceId: saleData.posDeviceId,
         shortOrderId: saleData.shortOrderId,
         amount: saleData.amount,
-        transactionId: saleData.transactionId,
+        allowedInstruments: saleData.allowedInstruments || [],
         autoAccept: saleData.autoAccept,
-        allowedInstruments: saleData.allowedInstruments,
+        
+        // These fields were missing previously:
+        autoAcceptWindowExpirySeconds: saleData.autoAcceptWindowExpirySeconds,
+        pregeneratedDQRTransactionId: saleData.pregeneratedDQRTransactionId,
+        pregeneratedCardTransactionId: saleData.pregeneratedCardTransactionId,
+        
+        transactionId: saleData.transactionId,
         creationTimestamp: saleData.creationTimestamp,
         createdAt: saleData.createdAt,
+
         data: saleData
     };
 };
@@ -142,8 +159,6 @@ app.post('/internal/sale', async (req, res) => {
         });
 
         await newSale.save();
-        
-        // Return structured response
         res.json(createSaleResponse(newSale.toObject()));
     } catch (e) {
         res.status(500).json({ code: "FAILED", message: e.message });
@@ -179,7 +194,6 @@ app.post('/internal/deploy', async (req, res) => {
         workflowId: "WF-" + Date.now(),
         applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
     });
-
     await newDeploy.save();
     res.json(newDeploy);
 });
@@ -190,12 +204,11 @@ app.post('/:terminalSNo/deploy', async (req, res) => {
         ...req.body,
         status: "DEPLOYED"
     });
-
     await newDeploy.save();
     res.json(newDeploy);
 });
 
-// OTP SEND
+// OTP
 app.post('/internal/otp/send', async (req, res) => {
     const verif = new VerificationModel({
         workflowId: req.body.workflowId,
@@ -203,7 +216,6 @@ app.post('/internal/otp/send', async (req, res) => {
         isVerified: false
     });
     await verif.save();
-
     res.json({ otpSent: true });
 });
 
@@ -211,7 +223,6 @@ app.post('/verification/:workflowId/dispatch', async (req, res) => {
     res.json({ otp: "1234", status: "SENT" });
 });
 
-// OTP VERIFY
 app.post('/internal/otp/verify', async (req, res) => {
     const record = await VerificationModel.findOne({ workflowId: req.body.workflowId });
     if (record) {
