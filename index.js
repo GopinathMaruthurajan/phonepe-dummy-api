@@ -72,22 +72,23 @@ const VerificationModel = mongoose.model('Verification', VerificationSchema);
 
 // REGISTER/GET CONFIG
 app.post('/internal/config', async (req, res) => {
-    const { mid, tid } = req.body;
+    const { mid, tid, integrationMode, integratedModeDisplayName, integrationMappingType } = req.body;
     let config = await ConfigModel.findOne({ merchantId: mid, terminalId: tid });
 
     if (!config) {
         config = new ConfigModel({
             merchantId: mid,
             terminalId: tid,
-            integrationMode: "CLOUD",
-            integratedModeDisplayName: "Cloud Integration (DB)",
-            integrationMappingType: "ONE_TO_ONE",
+            integrationMode: integrationMode || "STANDALONE",
+            integratedModeDisplayName: integratedModeDisplayName || "STANDALONE",
+            integrationMappingType: integrationMappingType || "ONE_TO_ONE",
             timestamp: new Date().toISOString()
         });
         await config.save();
     }
     res.json(config);
 });
+
 
 // MAIN API → CONFIG
 app.get('/v1/terminal/:mid/:tid/integrated-mode-config', async (req, res) => {
