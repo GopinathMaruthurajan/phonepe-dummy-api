@@ -157,7 +157,6 @@ app.post('/internal/deploy', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Device Deploy Fetch (Read Only)
 app.post('/:terminalSNo/deploy', async (req, res) => {
     try {
         console.log(`🔹 Device Fetch: ${req.params.terminalSNo}`);
@@ -172,47 +171,56 @@ app.post('/:terminalSNo/deploy', async (req, res) => {
 });
 
 // ==========================================
-// OTP ROUTES
+// OTP ROUTES (UPDATED)
 // ==========================================
+
+// 1. Send OTP (Internal) - Updated to 5 Digits
 app.post('/internal/otp/send', async (req, res) => {
     try {
-        const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        // Generate 5 Digit OTP (10000 - 99999)
+        const randomOtp = Math.floor(10000 + Math.random() * 90000).toString();
+        
         const verif = new VerificationModel({ workflowId: req.body.workflowId, otp: randomOtp, isVerified: false });
         await verif.save();
+        console.log(`🔹 OTP generated (Internal): ${randomOtp}`);
         res.json({ otpSent: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 2. Dispatch OTP (Auto-Generates 5-Digit OTP if missing)
 app.post('/verification/:workflowId/dispatch', async (req, res) => {
     try {
         const wfId = req.params.workflowId;
+        console.log(`🔹 Dispatch Request for: ${wfId}`);
+
         let record = await VerificationModel.findOne({ workflowId: wfId });
+
         if (!record) {
-            console.log(`⚠️ Auto-generating OTP for ${wfId}`);
-            const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
-            record = new VerificationModel({ workflowId: wfId, otp: randomOtp, isVerified: false });
+            // Generate 5 Digit OTP (10000 - 99999)
+            const randomOtp = Math.floor(10000 + Math.random() * 90000).toString();
+            console.log(`⚠️ Auto-generating 5-digit OTP: ${randomOtp}`);
+            
+            record = new VerificationModel({
+                workflowId: wfId,
+                otp: randomOtp,
+                isVerified: false
+            });
             await record.save();
         }
+
         res.json({ otp: record.otp, status: "SENT" });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+
+    } catch (e) {
+        console.error("Dispatch Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
-// Internal OTP Verify
-app.post('/internal/otp/verify', async (req, res) => {
-    try {
-        const record = await VerificationModel.findOne({ workflowId: req.body.workflowId });
-        if (record) { record.isVerified = true; await record.save(); }
-        res.json({ verified: true });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ==========================================
-// ANDROID APP VERIFY (FIXED ERROR HANDLING)
-// ==========================================
+// 3. Verify OTP (Android Logic)
 app.post('/verification/:workflowId/verify', async (req, res) => {
     try {
         const wfId = req.params.workflowId;
-        const userOtp = req.body.verificationCode; // Android param
+        const userOtp = req.body.verificationCode; // Android sends this key
 
         console.log(`🔹 Verifying OTP for ${wfId}. Received: ${userOtp}`);
 
@@ -222,18 +230,20 @@ app.post('/verification/:workflowId/verify', async (req, res) => {
             return res.status(404).json({ message: "Workflow ID not found." });
         }
 
-        // Logic Check
+        // OTP Check
         if (record.otp === userOtp) {
             record.isVerified = true;
             await record.save();
+            console.log("✅ OTP Verified Successfully");
             return res.status(200).json({ verified: true });
         } else {
-            console.log(`❌ Invalid OTP. Exp: ${record.otp}, Got: ${userOtp}`);
-            // Return 400 + Message to trigger Android catch block
+            console.log(`❌ Invalid OTP. Expected: ${record.otp}, Got: ${userOtp}`);
+            // Return 400 Bad Request to trigger Android Error Handling
             return res.status(400).json({ 
                 message: "Incorrect OTP entered. Please try again." 
             });
         }
+
     } catch (e) {
         res.status(500).json({ message: e.message });
     }
