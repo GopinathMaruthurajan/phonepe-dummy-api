@@ -79,29 +79,37 @@ const VerificationModel = mongoose.model('Verification', VerificationSchema);
 
 // REGISTER/GET CONFIG
 app.post('/internal/config', async (req, res) => {
-    const { mid, tid, integrationMode, integratedModeDisplayName, integrationMappingType } = req.body;
-    let config = await ConfigModel.findOne({ merchantId: mid, terminalId: tid });
+    try {
+        const { mid, tid, integrationMode, integratedModeDisplayName, integrationMappingType } = req.body;
+        let config = await ConfigModel.findOne({ merchantId: mid, terminalId: tid });
 
-    if (!config) {
-        config = new ConfigModel({
-            merchantId: mid,
-            terminalId: tid,
-            integrationMode: integrationMode || "STANDALONE",
-            integratedModeDisplayName: integratedModeDisplayName || "STANDALONE",
-            integrationMappingType: integrationMappingType || "ONE_TO_ONE",
-            timestamp: new Date().toISOString()
-        });
-        await config.save();
+        if (!config) {
+            config = new ConfigModel({
+                merchantId: mid,
+                terminalId: tid,
+                integrationMode: integrationMode || "STANDALONE",
+                integratedModeDisplayName: integratedModeDisplayName || "STANDALONE",
+                integrationMappingType: integrationMappingType || "ONE_TO_ONE",
+                timestamp: new Date().toISOString()
+            });
+            await config.save();
+        }
+        res.json(config);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
-    res.json(config);
 });
 
 app.get('/v1/terminal/:mid/:tid/integrated-mode-config', async (req, res) => {
-    const response = await ConfigModel.findOne({
-        merchantId: req.params.mid,
-        terminalId: req.params.tid
-    });
-    res.json(response || {});
+    try {
+        const response = await ConfigModel.findOne({
+            merchantId: req.params.mid,
+            terminalId: req.params.tid
+        });
+        res.json(response || {});
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // CHECK VOID
@@ -116,7 +124,7 @@ app.get('/v1/terminal/:mid/:tid/allow-void', async (req, res) => {
 });
 
 // ==========================================
-// 1. INTERNAL API - SAVES THE DATA (Cloud Trigger)
+// 1. INTERNAL API - SAVES/UPDATES DATA
 // ==========================================
 app.post('/internal/sale', async (req, res) => {
     try {
@@ -125,32 +133,39 @@ app.post('/internal/sale', async (req, res) => {
 
         const timestamp = Date.now();
         
-        // 1. Delete old pending sales for this terminal to avoid confusion
-        // We use $or here too in case you send swapped IDs to the delete command
-        await SaleModel.deleteMany({ 
-            $or: [
-                { merchantId: req.body.merchantId, terminalId: req.body.terminalId },
-                { merchantId: req.body.terminalId, terminalId: req.body.merchantId }
-            ],
-            status: "PENDING"
-        });
-
-        // 2. Create New Sale
-        const newSale = new SaleModel({
+        // Prepare the Data
+        const updateData = {
             ...req.body,
-            // Ensure amount is a number and handled correctly
             amount: req.body.amount ? Number(req.body.amount) : 0,
-            transactionId: "TXN_" + timestamp,
+            transactionId: "TXN_" + timestamp, // Generate new TXN ID on update
             createdAt: new Date().toISOString(),
             creationTimestamp: timestamp,
-            status: "PENDING" // Mark as PENDING so V1 knows this is the new one
-        });
+            status: "PENDING"
+        };
 
-        await newSale.save();
-        console.log("✅ Data Saved to DB with ID:", newSale._id);
+        // UPSERT OPERATION (Update if exists, Insert if new)
+        // We match based on Terminal ID + Status PENDING
+        // We use $or to handle the ID swap case just to be safe
+        const sale = await SaleModel.findOneAndUpdate(
+            {
+                $or: [
+                    { merchantId: req.body.merchantId, terminalId: req.body.terminalId },
+                    { merchantId: req.body.terminalId, terminalId: req.body.merchantId }
+                ],
+                status: "PENDING" // Only update if it's still pending
+            },
+            { $set: updateData },
+            { 
+                new: true,   // Return the updated document
+                upsert: true, // Create if it doesn't exist
+                setDefaultsOnInsert: true 
+            }
+        );
+
+        console.log("✅ Data Upserted (Updated/Created) ID:", sale._id);
         console.log("------------------------------------------------");
         
-        res.json(createSaleResponse(newSale.toObject()));
+        res.json(createSaleResponse(sale.toObject()));
     } catch (e) {
         console.error(e);
         res.status(500).json({ code: "FAILED", message: e.message });
@@ -158,44 +173,30 @@ app.post('/internal/sale', async (req, res) => {
 });
 
 // ==========================================
-// 2. V1 SALE REQUEST - FETCHES THE DATA (POS Trigger)
+// 2. V1 SALE REQUEST - FETCHES THE DATA
 // ==========================================
 app.post('/v1/sale-request', async (req, res) => {
     try {
         console.log("------------------------------------------------");
         console.log("🔸 V1 REQUEST: Looking for sale...");
-        console.log("   Input Body:", req.body);
-
         const { merchantId, terminalId } = req.body;
 
         if (!merchantId || !terminalId) {
-            console.log("❌ Missing merchantId or terminalId");
-            return res.status(400).json({ 
-                code: "FAILED", 
-                message: "merchantId and terminalId are required" 
-            });
+            return res.status(400).json({ code: "FAILED", message: "merchantId and terminalId required" });
         }
 
-        // 3. SMART QUERY: Find the latest sale even if IDs are swapped
         const latestSale = await SaleModel.findOne({ 
             $or: [
-                { merchantId: merchantId, terminalId: terminalId }, // Exact Match
-                { merchantId: terminalId, terminalId: merchantId }  // Swapped Match
+                { merchantId: merchantId, terminalId: terminalId },
+                { merchantId: terminalId, terminalId: merchantId }
             ]
-        }).sort({ _id: -1 }); // Get the absolute newest record
+        }).sort({ _id: -1 });
 
         if (!latestSale) {
-            console.log("❌ Database Query Result: NULL (No match found)");
-            return res.status(404).json({ 
-                code: "FAILED", 
-                message: "No sale found for this terminal" 
-            });
+            return res.status(404).json({ code: "FAILED", message: "No sale found for this terminal" });
         }
 
         console.log("✅ Found Sale:", latestSale._id, "| Amount:", latestSale.amount);
-        console.log("------------------------------------------------");
-
-        // 4. Return the data
         res.json(createSaleResponse(latestSale.toObject()));
 
     } catch (e) {
@@ -227,52 +228,99 @@ const createSaleResponse = (saleData) => {
 };
 
 // ==========================================
-// DEPLOY & OTP
+// DEPLOY ROUTES (FIXED HANGING ISSUE)
 // ==========================================
 
+// 1. Static route must come BEFORE dynamic route
 app.post('/internal/deploy', async (req, res) => {
-    const newDeploy = new DeployModel({
-        ...req.body,
-        status: "DEPLOYED",
-        workflowId: "WF-" + Date.now(),
-        applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
-    });
-    await newDeploy.save();
-    res.json(newDeploy);
+    try {
+        const newDeploy = new DeployModel({
+            ...req.body,
+            status: "DEPLOYED",
+            workflowId: "WF-" + Date.now(),
+            applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
+        });
+        await newDeploy.save();
+        res.json(newDeploy);
+    } catch (e) {
+        console.error("Deploy Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
+// 2. Dynamic route (This was likely causing the hang if error occurred)
 app.post('/:terminalSNo/deploy', async (req, res) => {
-    const newDeploy = new DeployModel({
-        terminalId: req.params.terminalSNo,
-        ...req.body,
-        status: "DEPLOYED"
-    });
-    await newDeploy.save();
-    res.json(newDeploy);
+    try {
+        console.log(`🔹 Deploy Request for Terminal: ${req.params.terminalSNo}`);
+        
+        const newDeploy = new DeployModel({
+            // Merge params and body. Params take priority for terminalId
+            ...req.body,
+            terminalId: req.params.terminalSNo, 
+            status: "DEPLOYED",
+            // Generate workflow if not sent
+            workflowId: req.body.workflowId || ("WF-" + Date.now()),
+            applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
+        });
+
+        await newDeploy.save();
+        res.json(newDeploy);
+    } catch (e) {
+        console.error("Deploy Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
-// OTP
+// ==========================================
+// OTP ROUTES (FIXED HARDCODING)
+// ==========================================
+
 app.post('/internal/otp/send', async (req, res) => {
-    const verif = new VerificationModel({
-        workflowId: req.body.workflowId,
-        otp: "1234",
-        isVerified: false
-    });
-    await verif.save();
-    res.json({ otpSent: true });
+    try {
+        // Generate a random 4-digit OTP
+        const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        
+        const verif = new VerificationModel({
+            workflowId: req.body.workflowId,
+            otp: randomOtp,
+            isVerified: false
+        });
+        await verif.save();
+        
+        // Return OTP in console for testing, but API says sent
+        console.log(`🔹 OTP generated for ${req.body.workflowId}: ${randomOtp}`);
+        res.json({ otpSent: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
+// This API now fetches the REAL OTP from DB
 app.post('/verification/:workflowId/dispatch', async (req, res) => {
-    res.json({ otp: "1234", status: "SENT" });
+    try {
+        const record = await VerificationModel.findOne({ workflowId: req.params.workflowId });
+        
+        if (record) {
+            res.json({ otp: record.otp, status: "SENT" });
+        } else {
+            res.status(404).json({ error: "Workflow ID not found" });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/internal/otp/verify', async (req, res) => {
-    const record = await VerificationModel.findOne({ workflowId: req.body.workflowId });
-    if (record) {
-        record.isVerified = true;
-        await record.save();
+    try {
+        const record = await VerificationModel.findOne({ workflowId: req.body.workflowId });
+        if (record) {
+            record.isVerified = true;
+            await record.save();
+        }
+        res.json({ verified: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
-    res.json({ verified: true });
 });
 
 app.post('/verification/:workflowId/verify', async (req, res) => {
