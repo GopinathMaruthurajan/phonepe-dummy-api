@@ -171,13 +171,12 @@ app.post('/:terminalSNo/deploy', async (req, res) => {
 });
 
 // ==========================================
-// OTP ROUTES (UPDATED FOR ANDROID LOGIC)
+// OTP ROUTES (UPDATED FOR 204 SUCCESS)
 // ==========================================
 
 // 1. Send OTP (5 Digits)
 app.post('/internal/otp/send', async (req, res) => {
     try {
-        // Generate 5 digits (10000 - 99999)
         const randomOtp = Math.floor(10000 + Math.random() * 90000).toString();
         const verif = new VerificationModel({ workflowId: req.body.workflowId, otp: randomOtp, isVerified: false });
         await verif.save();
@@ -185,7 +184,7 @@ app.post('/internal/otp/send', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 2. Dispatch OTP (5 Digits Auto-Gen)
+// 2. Dispatch OTP (5 Digits Auto-Gen, Auto-Fix 4 Digits)
 app.post('/verification/:workflowId/dispatch', async (req, res) => {
     try {
         const wfId = req.params.workflowId;
@@ -197,12 +196,17 @@ app.post('/verification/:workflowId/dispatch', async (req, res) => {
             const randomOtp = Math.floor(10000 + Math.random() * 90000).toString();
             record = new VerificationModel({ workflowId: wfId, otp: randomOtp, isVerified: false });
             await record.save();
+        } else if (record.otp.length < 5) {
+            // Fix old 4-digit OTPs
+            const randomOtp = Math.floor(10000 + Math.random() * 90000).toString();
+            record.otp = randomOtp;
+            await record.save();
         }
         res.json({ otp: record.otp, status: "SENT" });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 3. Verify OTP (Handles Android Error Codes)
+// 3. Verify OTP (Returns 204 on Success)
 app.post('/verification/:workflowId/verify', async (req, res) => {
     try {
         const wfId = req.params.workflowId;
@@ -213,7 +217,6 @@ app.post('/verification/:workflowId/verify', async (req, res) => {
         const record = await VerificationModel.findOne({ workflowId: wfId });
 
         if (!record) {
-            // Android: case "INVALID_WORKFLOW_ID"
             return res.status(400).json({ 
                 code: "INVALID_WORKFLOW_ID", 
                 message: "Workflow ID not found." 
@@ -223,12 +226,13 @@ app.post('/verification/:workflowId/verify', async (req, res) => {
         if (record.otp === userOtp) {
             record.isVerified = true;
             await record.save();
-            console.log("✅ OTP Verified");
-            return res.status(200).json({ verified: true });
+            console.log("✅ OTP Verified. Sending 204.");
+            
+            // Return 204 NO CONTENT for Success
+            return res.status(204).send(); 
+
         } else {
             console.log(`❌ Invalid OTP. Exp: ${record.otp}, Got: ${userOtp}`);
-            
-            // Android: checks errorResponse.getCode().equalsIgnoreCase("INVALID_OTP")
             return res.status(400).json({ 
                 code: "INVALID_OTP",
                 message: "Incorrect OTP entered. Please try again." 
