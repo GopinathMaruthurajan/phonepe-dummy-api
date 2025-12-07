@@ -179,13 +179,37 @@ app.post('/v1/sale-request', async (req, res) => {
 app.post('/internal/deploy', async (req, res) => {
     try {
         const newDeploy = new DeployModel({
-            ...req.body, status: "DEPLOYED",
+            ...req.body, 
+            // 1. Take status from API body. Default to "DEPLOYED" if missing.
+            status: req.body.status || "DEPLOYED", 
             workflowId: "WF-" + Date.now(),
             applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
         });
         await newDeploy.save();
         res.json(newDeploy);
     } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ... OTP Routes remain here ...
+
+// DYNAMIC ROUTES (MUST BE LAST)
+app.post('/:terminalSNo/deploy', async (req, res) => {
+    try {
+        console.log(`🔹 Deploy Request: ${req.params.terminalSNo}`);
+        const newDeploy = new DeployModel({
+            ...req.body,
+            terminalId: req.params.terminalSNo,
+            // 2. Take status from API body. Default to "DEPLOYED" if missing.
+            status: req.body.status || "DEPLOYED", 
+            workflowId: req.body.workflowId || ("WF-" + Date.now()),
+            applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
+        });
+        await newDeploy.save();
+        res.json(newDeploy);
+    } catch (e) {
+        console.error("Deploy Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/internal/otp/send', async (req, res) => {
@@ -216,25 +240,6 @@ app.post('/internal/otp/verify', async (req, res) => {
 
 app.post('/verification/:workflowId/verify', async (req, res) => {
     res.json({ verified: true });
-});
-
-// DYNAMIC ROUTES (LAST)
-app.post('/:terminalSNo/deploy', async (req, res) => {
-    try {
-        console.log(`🔹 Deploy Request: ${req.params.terminalSNo}`);
-        const newDeploy = new DeployModel({
-            ...req.body,
-            terminalId: req.params.terminalSNo,
-            status: "DEPLOYED",
-            workflowId: req.body.workflowId || ("WF-" + Date.now()),
-            applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
-        });
-        await newDeploy.save();
-        res.json(newDeploy);
-    } catch (e) {
-        console.error("Deploy Error:", e);
-        res.status(500).json({ error: e.message });
-    }
 });
 
 // ==========================================
