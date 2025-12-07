@@ -176,74 +176,68 @@ app.post('/v1/sale-request', async (req, res) => {
 
 // --- DEPLOY & OTP ---
 
+// 1. Internal Deploy (Updates/Inserts)
 app.post('/internal/deploy', async (req, res) => {
     try {
-        console.log("🔹 Internal Deploy Update:", req.body);
+        console.log("🔹 Internal Deploy:", req.body);
         
-        // We use finding based on Terminal ID to ensure uniqueness
-        const filter = { terminalId: req.body.terminalId };
+        // Try to match exact or swapped
+        const filter = { 
+            $or: [
+                { merchantId: req.body.merchantId, terminalId: req.body.terminalId },
+                { merchantId: req.body.terminalId, terminalId: req.body.merchantId }
+            ]
+        };
 
         const updateDoc = {
             $set: {
-                ...req.body, // Update Sim, AppId, Status, MerchantId
+                ...req.body,
                 status: req.body.status || "DEPLOYED"
             },
-            // Only generate these if it is a NEW record. 
-            // If updating, keep the old Workflow/App Number.
             $setOnInsert: {
                 workflowId: "WF-" + Date.now(),
                 applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
             }
         };
 
-        const result = await DeployModel.findOneAndUpdate(
-            filter,
-            updateDoc,
-            { new: true, upsert: true } // Upsert = Update or Insert
-        );
-
+        const result = await DeployModel.findOneAndUpdate(filter, updateDoc, { new: true, upsert: true });
         res.json(result);
-    } catch (e) { 
-        res.status(500).json({ error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 2. Dynamic Route (Device Trigger) - MUST BE LAST
+// 2. Device Deploy (Fetch Only - Handles Swapped IDs & Serial No)
 app.post('/:terminalSNo/deploy', async (req, res) => {
     try {
-        console.log("------------------------------------------------");
-        console.log(`🔹 Device Deploy Fetch: URL=${req.params.terminalSNo}`);
-        console.log(`   Body TerminalId=${req.body.terminalId}`);
+        console.log(`🔹 Device Fetch: ${req.params.terminalSNo}`);
+        const { merchantId, terminalId } = req.body;
 
-        // WE LOOK FOR A MATCH IN DB
-        // The record might be saved under the 'terminalId' (BEQ...) 
-        // OR the 'posDeviceId'/'terminalSNo' (0005...)
         const deployRecord = await DeployModel.findOne({
             $or: [
-                { terminalId: req.body.terminalId },      // Match Body ID (e.g., BEQ08545)
-                { terminalId: req.params.terminalSNo },   // Match URL ID (e.g., 00052030188)
-                { posDeviceId: req.params.terminalSNo }   // Match POS ID field
+                // 1. Check exact match
+                { merchantId: merchantId, terminalId: terminalId },
+                // 2. Check SWAPPED match (Fixes your issue)
+                { merchantId: terminalId, terminalId: merchantId },
+                // 3. Check by POS Device ID (if available)
+                { posDeviceId: req.params.terminalSNo }
             ]
-        }).sort({ _id: -1 }); // Get the latest created one
+        }).sort({ _id: -1 });
 
         if (!deployRecord) {
-            console.log("❌ No Deployment Record Found.");
-            // Optional: You can return 404, or return a default 'NOT_DEPLOYED' status
-            return res.status(404).json({ 
-                error: "Deployment not found. Please call /internal/deploy first." 
-            });
+            console.log("❌ Not Found in DB.");
+            return res.status(404).json({ error: "Deployment not found. Please call /internal/deploy first." });
         }
 
-        console.log("✅ Found Record:", deployRecord._id, "Status:", deployRecord.status);
-        console.log("------------------------------------------------");
-
-        // Return the existing DB record (Ignore request body updates)
+        console.log("✅ Found:", deployRecord._id);
         res.json(deployRecord);
 
     } catch (e) {
-        console.error("Deploy Fetch Error:", e);
+        console.error("Deploy Error:", e);
         res.status(500).json({ error: e.message });
     }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server running on PORT ${PORT}`);
 });
 
 app.post('/internal/otp/send', async (req, res) => {
