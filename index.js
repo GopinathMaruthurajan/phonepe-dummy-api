@@ -11,7 +11,7 @@ const app = express();
 app.use(bodyParser.json());
 
 // ==========================================
-// 1. REQUEST LOGGER (DEBUGGING)
+// 1. REQUEST LOGGER
 // ==========================================
 app.use((req, res, next) => {
     console.log(`➡️  ${req.method} ${req.url}`);
@@ -19,7 +19,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 2. HEALTH CHECK (REQUIRED FOR RAILWAY)
+// 2. HEALTH CHECK
 // ==========================================
 app.get('/', (req, res) => {
     res.status(200).send('PhonePe Dummy API is Running 🚀');
@@ -59,41 +59,32 @@ const SaleSchema = new mongoose.Schema({
 });
 const SaleModel = mongoose.model('Sale', SaleSchema);
 
-const DeploySchema = new mongoose.Schema({ simNo: String, merchantId: String, terminalId: String, appId: String, status: String, workflowId: String, applicationNumber: String });
+const DeploySchema = new mongoose.Schema({ simNo: String, merchantId: String, terminalId: String, posDeviceId: String, appId: String, status: String, workflowId: String, applicationNumber: String });
 const DeployModel = mongoose.model('Deployment', DeploySchema);
 
 const VerificationSchema = new mongoose.Schema({ workflowId: String, appId: String, otp: String, isVerified: Boolean, simNo: String, latitude: String, longitude: String });
 const VerificationModel = mongoose.model('Verification', VerificationSchema);
 
 // ==========================================
-// API ROUTES
+// CONFIG ROUTES
 // ==========================================
-
-// UPDATED: UPSERT CONFIG (PREVENT DUPLICATES)
 app.post('/internal/config', async (req, res) => {
     try {
         const { mid, tid, integrationMode, integratedModeDisplayName, integrationMappingType } = req.body;
-
         const updateData = {
-            merchantId: mid,
-            terminalId: tid,
+            merchantId: mid, terminalId: tid,
             integrationMode: integrationMode || "STANDALONE",
             integratedModeDisplayName: integratedModeDisplayName || "STANDALONE",
             integrationMappingType: integrationMappingType || "ONE_TO_ONE",
             timestamp: new Date().toISOString()
         };
-
-        // Find by MID + TID. Update if exists, Create if new.
         const config = await ConfigModel.findOneAndUpdate(
-            { merchantId: mid, terminalId: tid }, // Filter
-            { $set: updateData },                 // Update
-            { new: true, upsert: true, setDefaultsOnInsert: true } // Options
+            { merchantId: mid, terminalId: tid },
+            { $set: updateData },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
         );
-
         res.json(config);
-    } catch (e) { 
-        res.status(500).json({ error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/v1/terminal/:mid/:tid/integrated-mode-config', async (req, res) => {
@@ -104,15 +95,16 @@ app.get('/v1/terminal/:mid/:tid/integrated-mode-config', async (req, res) => {
 });
 
 app.post('/internal/check-void', (req, res) => {
-    const { mid, tid, invoiceNumber } = req.body;
-    res.json({ merchantId: mid, terminalId: tid, allow: invoiceNumber !== "0000" });
+    res.json({ merchantId: req.body.mid, terminalId: req.body.tid, allow: req.body.invoiceNumber !== "0000" });
 });
 
 app.get('/v1/terminal/:mid/:tid/allow-void', (req, res) => {
     res.json({ allow: req.query.invoiceNumber !== "0000" });
 });
 
-// --- SALE LOGIC ---
+// ==========================================
+// SALE ROUTES
+// ==========================================
 const createSaleResponse = (saleData) => ({
     code: "SUCCESS", message: "Sale Processed Successfully",
     merchantId: saleData.merchantId, terminalId: saleData.terminalId, posDeviceId: saleData.posDeviceId,
@@ -130,162 +122,82 @@ app.post('/internal/sale', async (req, res) => {
     try {
         console.log("🔹 Internal Sale:", req.body);
         const timestamp = Date.now();
-        const updateData = {
-            ...req.body,
-            amount: req.body.amount ? Number(req.body.amount) : 0,
-            transactionId: "TXN_" + timestamp,
-            createdAt: new Date().toISOString(),
-            creationTimestamp: timestamp,
-            status: "PENDING"
-        };
-
         const sale = await SaleModel.findOneAndUpdate(
-            {
-                $or: [
-                    { merchantId: req.body.merchantId, terminalId: req.body.terminalId },
-                    { merchantId: req.body.terminalId, terminalId: req.body.merchantId }
-                ],
-                status: "PENDING"
-            },
-            { $set: updateData },
-            { new: true, upsert: true, setDefaultsOnInsert: true }
+            { $or: [{ merchantId: req.body.merchantId, terminalId: req.body.terminalId }, { merchantId: req.body.terminalId, terminalId: req.body.merchantId }], status: "PENDING" },
+            { $set: { ...req.body, amount: req.body.amount ? Number(req.body.amount) : 0, transactionId: "TXN_" + timestamp, createdAt: new Date().toISOString(), creationTimestamp: timestamp, status: "PENDING" } },
+            { new: true, upsert: true }
         );
         res.json(createSaleResponse(sale.toObject()));
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ code: "FAILED", message: e.message });
-    }
+    } catch (e) { res.status(500).json({ code: "FAILED", message: e.message }); }
 });
 
 app.post('/v1/sale-request', async (req, res) => {
     try {
         const { merchantId, terminalId } = req.body;
         if (!merchantId || !terminalId) return res.status(400).json({ code: "FAILED", message: "IDs required" });
-
-        const latestSale = await SaleModel.findOne({
-            $or: [
-                { merchantId: merchantId, terminalId: terminalId },
-                { merchantId: terminalId, terminalId: merchantId }
-            ]
-        }).sort({ _id: -1 });
-
+        const latestSale = await SaleModel.findOne({ $or: [{ merchantId: merchantId, terminalId: terminalId }, { merchantId: terminalId, terminalId: merchantId }] }).sort({ _id: -1 });
         if (!latestSale) return res.status(404).json({ code: "FAILED", message: "No sale found" });
         res.json(createSaleResponse(latestSale.toObject()));
     } catch (e) { res.status(500).json({ code: "FAILED", message: e.message }); }
 });
 
-// --- DEPLOY & OTP ---
-
-// 1. Internal Deploy (Updates/Inserts)
+// ==========================================
+// DEPLOY ROUTES
+// ==========================================
 app.post('/internal/deploy', async (req, res) => {
     try {
         console.log("🔹 Internal Deploy:", req.body);
-        
-        // Try to match exact or swapped
-        const filter = { 
-            $or: [
-                { merchantId: req.body.merchantId, terminalId: req.body.terminalId },
-                { merchantId: req.body.terminalId, terminalId: req.body.merchantId }
-            ]
-        };
-
+        const filter = { $or: [{ merchantId: req.body.merchantId, terminalId: req.body.terminalId }, { merchantId: req.body.terminalId, terminalId: req.body.merchantId }] };
         const updateDoc = {
-            $set: {
-                ...req.body,
-                status: req.body.status || "DEPLOYED"
-            },
-            $setOnInsert: {
-                workflowId: "WF-" + Date.now(),
-                applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
-            }
+            $set: { ...req.body, status: req.body.status || "DEPLOYED" },
+            $setOnInsert: { workflowId: "WF-" + Date.now(), applicationNumber: "APP-" + Math.floor(Math.random() * 1000) }
         };
-
         const result = await DeployModel.findOneAndUpdate(filter, updateDoc, { new: true, upsert: true });
         res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 2. Device Deploy (Fetch Only - Handles Swapped IDs & Serial No)
+// Device Deploy Fetch (Read Only)
 app.post('/:terminalSNo/deploy', async (req, res) => {
     try {
         console.log(`🔹 Device Fetch: ${req.params.terminalSNo}`);
         const { merchantId, terminalId } = req.body;
-
         const deployRecord = await DeployModel.findOne({
-            $or: [
-                // 1. Check exact match
-                { merchantId: merchantId, terminalId: terminalId },
-                // 2. Check SWAPPED match (Fixes your issue)
-                { merchantId: terminalId, terminalId: merchantId },
-                // 3. Check by POS Device ID (if available)
-                { posDeviceId: req.params.terminalSNo }
-            ]
+            $or: [{ merchantId: merchantId, terminalId: terminalId }, { merchantId: terminalId, terminalId: merchantId }, { posDeviceId: req.params.terminalSNo }]
         }).sort({ _id: -1 });
 
-        if (!deployRecord) {
-            console.log("❌ Not Found in DB.");
-            return res.status(404).json({ error: "Deployment not found. Please call /internal/deploy first." });
-        }
-
-        console.log("✅ Found:", deployRecord._id);
+        if (!deployRecord) return res.status(404).json({ error: "Deployment not found" });
         res.json(deployRecord);
-
-    } catch (e) {
-        console.error("Deploy Error:", e);
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on PORT ${PORT}`);
-});
-
+// ==========================================
+// OTP ROUTES
+// ==========================================
 app.post('/internal/otp/send', async (req, res) => {
     try {
         const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const verif = new VerificationModel({ workflowId: req.body.workflowId, otp: randomOtp, isVerified: false });
         await verif.save();
-        console.log(`🔹 OTP generated: ${randomOtp}`);
         res.json({ otpSent: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ==========================================
-// 2. DISPATCH OTP (Updated: Auto-Create if missing)
-// ==========================================
 app.post('/verification/:workflowId/dispatch', async (req, res) => {
     try {
         const wfId = req.params.workflowId;
-        console.log(`🔹 Dispatch Request for: ${wfId}`);
-
-        // 1. Try to find existing OTP record
         let record = await VerificationModel.findOne({ workflowId: wfId });
-
-        // 2. If NOT found, Auto-Generate it (Lazy Creation)
         if (!record) {
-            console.log(`⚠️ No OTP found for ${wfId}. Auto-generating...`);
-            
+            console.log(`⚠️ Auto-generating OTP for ${wfId}`);
             const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
-            
-            record = new VerificationModel({
-                workflowId: wfId,
-                otp: randomOtp,
-                isVerified: false
-            });
-            
+            record = new VerificationModel({ workflowId: wfId, otp: randomOtp, isVerified: false });
             await record.save();
-            console.log(`✅ Auto-generated OTP: ${randomOtp}`);
         }
-
-        // 3. Return the OTP
         res.json({ otp: record.otp, status: "SENT" });
-
-    } catch (e) {
-        console.error("Dispatch Error:", e);
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Internal OTP Verify
 app.post('/internal/otp/verify', async (req, res) => {
     try {
         const record = await VerificationModel.findOne({ workflowId: req.body.workflowId });
@@ -294,12 +206,41 @@ app.post('/internal/otp/verify', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==========================================
+// ANDROID APP VERIFY (FIXED ERROR HANDLING)
+// ==========================================
 app.post('/verification/:workflowId/verify', async (req, res) => {
-    res.json({ verified: true });
+    try {
+        const wfId = req.params.workflowId;
+        const userOtp = req.body.verificationCode; // Android param
+
+        console.log(`🔹 Verifying OTP for ${wfId}. Received: ${userOtp}`);
+
+        const record = await VerificationModel.findOne({ workflowId: wfId });
+
+        if (!record) {
+            return res.status(404).json({ message: "Workflow ID not found." });
+        }
+
+        // Logic Check
+        if (record.otp === userOtp) {
+            record.isVerified = true;
+            await record.save();
+            return res.status(200).json({ verified: true });
+        } else {
+            console.log(`❌ Invalid OTP. Exp: ${record.otp}, Got: ${userOtp}`);
+            // Return 400 + Message to trigger Android catch block
+            return res.status(400).json({ 
+                message: "Incorrect OTP entered. Please try again." 
+            });
+        }
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
 });
 
 // ==========================================
-// START SERVER (UPDATED FOR RAILWAY)
+// START SERVER
 // ==========================================
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on PORT ${PORT}`);
