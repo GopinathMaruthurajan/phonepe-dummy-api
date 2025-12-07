@@ -211,32 +211,37 @@ app.post('/internal/deploy', async (req, res) => {
 // 2. Dynamic Route (Device Trigger) - MUST BE LAST
 app.post('/:terminalSNo/deploy', async (req, res) => {
     try {
-        console.log(`🔹 Device Deploy Update: ${req.params.terminalSNo}`);
-        
-        // Force the Terminal ID from the URL to be the unique key
-        const filter = { terminalId: req.params.terminalSNo };
+        console.log("------------------------------------------------");
+        console.log(`🔹 Device Deploy Fetch: URL=${req.params.terminalSNo}`);
+        console.log(`   Body TerminalId=${req.body.terminalId}`);
 
-        const updateDoc = {
-            $set: {
-                ...req.body,
-                terminalId: req.params.terminalSNo, // Ensure TID matches URL
-                status: req.body.status || "DEPLOYED"
-            },
-            $setOnInsert: {
-                workflowId: req.body.workflowId || ("WF-" + Date.now()),
-                applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
-            }
-        };
+        // WE LOOK FOR A MATCH IN DB
+        // The record might be saved under the 'terminalId' (BEQ...) 
+        // OR the 'posDeviceId'/'terminalSNo' (0005...)
+        const deployRecord = await DeployModel.findOne({
+            $or: [
+                { terminalId: req.body.terminalId },      // Match Body ID (e.g., BEQ08545)
+                { terminalId: req.params.terminalSNo },   // Match URL ID (e.g., 00052030188)
+                { posDeviceId: req.params.terminalSNo }   // Match POS ID field
+            ]
+        }).sort({ _id: -1 }); // Get the latest created one
 
-        const result = await DeployModel.findOneAndUpdate(
-            filter,
-            updateDoc,
-            { new: true, upsert: true }
-        );
+        if (!deployRecord) {
+            console.log("❌ No Deployment Record Found.");
+            // Optional: You can return 404, or return a default 'NOT_DEPLOYED' status
+            return res.status(404).json({ 
+                error: "Deployment not found. Please call /internal/deploy first." 
+            });
+        }
 
-        res.json(result);
+        console.log("✅ Found Record:", deployRecord._id, "Status:", deployRecord.status);
+        console.log("------------------------------------------------");
+
+        // Return the existing DB record (Ignore request body updates)
+        res.json(deployRecord);
+
     } catch (e) {
-        console.error("Deploy Error:", e);
+        console.error("Deploy Fetch Error:", e);
         res.status(500).json({ error: e.message });
     }
 });
