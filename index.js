@@ -11,33 +11,35 @@ const app = express();
 app.use(bodyParser.json());
 
 // ==========================================
-// 1. HEALTH CHECK ROUTE (CRITICAL FOR RAILWAY)
+// 1. REQUEST LOGGER (DEBUGGING)
 // ==========================================
-// Railway pings this to ensure the app is alive. 
-// Without this, Railway kills the app (SIGTERM).
+// This helps us see if requests are hitting the server
+app.use((req, res, next) => {
+    console.log(`➡️  ${req.method} ${req.url}`);
+    next();
+});
+
+// ==========================================
+// 2. HEALTH CHECK (REQUIRED FOR RAILWAY)
+// ==========================================
+// Railway pings this. If it doesn't respond 200 OK, the app gets killed.
 app.get('/', (req, res) => {
     res.status(200).send('PhonePe Dummy API is Running 🚀');
 });
 
-app.get('/health', (req, res) => {
-    const dbState = mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected';
-    res.status(200).json({ status: 'UP', db: dbState });
-});
-
 // ==========================================
-// 2. ROBUST DATABASE CONNECTION
+// 3. DATABASE CONNECTION
 // ==========================================
 const DB_URI = 'mongodb+srv://gopinathm_db_user:bi1gSuo0zFTO4ebG@cluster0.siwdo6l.mongodb.net/phonepe_apis?retryWrites=true&w=majority&appName=Cluster0';
 
 mongoose.connect(DB_URI, {
     dbName: 'phonepe_apis',
-    serverSelectionTimeoutMS: 5000, // Fail fast if blocked
+    serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
 })
 .then(() => console.log('✅ Connected to MongoDB'))
 .catch(err => console.error('❌ DB Connection Error:', err.message));
 
-// Handle DB errors after initial connection
 mongoose.connection.on('error', err => {
     console.error('❌ MongoDB Runtime Error:', err);
 });
@@ -104,7 +106,6 @@ app.get('/v1/terminal/:mid/:tid/allow-void', (req, res) => {
 });
 
 // --- SALE LOGIC ---
-
 const createSaleResponse = (saleData) => ({
     code: "SUCCESS", message: "Sale Processed Successfully",
     merchantId: saleData.merchantId, terminalId: saleData.terminalId, posDeviceId: saleData.posDeviceId,
@@ -120,7 +121,7 @@ const createSaleResponse = (saleData) => ({
 
 app.post('/internal/sale', async (req, res) => {
     try {
-        console.log("🔹 Internal Sale Update:", req.body);
+        console.log("🔹 Internal Sale:", req.body);
         const timestamp = Date.now();
         const updateData = {
             ...req.body,
@@ -131,7 +132,6 @@ app.post('/internal/sale', async (req, res) => {
             status: "PENDING"
         };
 
-        // Update if exists (Upsert), handles swapped IDs
         const sale = await SaleModel.findOneAndUpdate(
             {
                 $or: [
@@ -145,8 +145,8 @@ app.post('/internal/sale', async (req, res) => {
         );
         res.json(createSaleResponse(sale.toObject()));
     } catch (e) {
-        console.error("Sale Error:", e);
-        res.status(500).json({ code: "FAILED", message: "DB Error: " + e.message });
+        console.error(e);
+        res.status(500).json({ code: "FAILED", message: e.message });
     }
 });
 
@@ -163,7 +163,6 @@ app.post('/v1/sale-request', async (req, res) => {
         }).sort({ _id: -1 });
 
         if (!latestSale) return res.status(404).json({ code: "FAILED", message: "No sale found" });
-
         res.json(createSaleResponse(latestSale.toObject()));
     } catch (e) { res.status(500).json({ code: "FAILED", message: e.message }); }
 });
@@ -187,7 +186,7 @@ app.post('/internal/otp/send', async (req, res) => {
         const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const verif = new VerificationModel({ workflowId: req.body.workflowId, otp: randomOtp, isVerified: false });
         await verif.save();
-        console.log(`🔹 OTP for ${req.body.workflowId}: ${randomOtp}`);
+        console.log(`🔹 OTP generated: ${randomOtp}`);
         res.json({ otpSent: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -212,7 +211,7 @@ app.post('/verification/:workflowId/verify', async (req, res) => {
     res.json({ verified: true });
 });
 
-// Dynamic Route - MUST BE LAST
+// DYNAMIC ROUTES (LAST)
 app.post('/:terminalSNo/deploy', async (req, res) => {
     try {
         console.log(`🔹 Deploy Request: ${req.params.terminalSNo}`);
@@ -227,26 +226,14 @@ app.post('/:terminalSNo/deploy', async (req, res) => {
         res.json(newDeploy);
     } catch (e) {
         console.error("Deploy Error:", e);
-        res.status(500).json({ error: "DB Error: " + e.message });
+        res.status(500).json({ error: e.message });
     }
 });
 
 // ==========================================
-// PREVENT CRASHES ON UNHANDLED ERRORS
+// START SERVER (UPDATED FOR RAILWAY)
 // ==========================================
-process.on('uncaughtException', (err) => {
-    console.error('💥 Uncaught Exception:', err);
-    // Don't exit, just log it so Railway keeps running
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('💥 Unhandled Rejection:', reason);
-    // Don't exit
-});
-
-// ==========================================
-// START SERVER
-// ==========================================
-app.listen(PORT, () => {
+// We bind to 0.0.0.0 to ensure the container exposes the port externally
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on PORT ${PORT}`);
 });
