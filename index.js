@@ -13,7 +13,6 @@ app.use(bodyParser.json());
 // ==========================================
 // 1. REQUEST LOGGER (DEBUGGING)
 // ==========================================
-// This helps us see if requests are hitting the server
 app.use((req, res, next) => {
     console.log(`➡️  ${req.method} ${req.url}`);
     next();
@@ -22,7 +21,6 @@ app.use((req, res, next) => {
 // ==========================================
 // 2. HEALTH CHECK (REQUIRED FOR RAILWAY)
 // ==========================================
-// Railway pings this. If it doesn't respond 200 OK, the app gets killed.
 app.get('/', (req, res) => {
     res.status(200).send('PhonePe Dummy API is Running 🚀');
 });
@@ -71,22 +69,31 @@ const VerificationModel = mongoose.model('Verification', VerificationSchema);
 // API ROUTES
 // ==========================================
 
+// UPDATED: UPSERT CONFIG (PREVENT DUPLICATES)
 app.post('/internal/config', async (req, res) => {
     try {
         const { mid, tid, integrationMode, integratedModeDisplayName, integrationMappingType } = req.body;
-        let config = await ConfigModel.findOne({ merchantId: mid, terminalId: tid });
-        if (!config) {
-            config = new ConfigModel({
-                merchantId: mid, terminalId: tid,
-                integrationMode: integrationMode || "STANDALONE",
-                integratedModeDisplayName: integratedModeDisplayName || "STANDALONE",
-                integrationMappingType: integrationMappingType || "ONE_TO_ONE",
-                timestamp: new Date().toISOString()
-            });
-            await config.save();
-        }
+
+        const updateData = {
+            merchantId: mid,
+            terminalId: tid,
+            integrationMode: integrationMode || "STANDALONE",
+            integratedModeDisplayName: integratedModeDisplayName || "STANDALONE",
+            integrationMappingType: integrationMappingType || "ONE_TO_ONE",
+            timestamp: new Date().toISOString()
+        };
+
+        // Find by MID + TID. Update if exists, Create if new.
+        const config = await ConfigModel.findOneAndUpdate(
+            { merchantId: mid, terminalId: tid }, // Filter
+            { $set: updateData },                 // Update
+            { new: true, upsert: true, setDefaultsOnInsert: true } // Options
+        );
+
         res.json(config);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
 app.get('/v1/terminal/:mid/:tid/integrated-mode-config', async (req, res) => {
@@ -233,7 +240,6 @@ app.post('/:terminalSNo/deploy', async (req, res) => {
 // ==========================================
 // START SERVER (UPDATED FOR RAILWAY)
 // ==========================================
-// We bind to 0.0.0.0 to ensure the container exposes the port externally
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on PORT ${PORT}`);
 });
