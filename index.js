@@ -178,34 +178,63 @@ app.post('/v1/sale-request', async (req, res) => {
 
 app.post('/internal/deploy', async (req, res) => {
     try {
-        const newDeploy = new DeployModel({
-            ...req.body, 
-            // 1. Take status from API body. Default to "DEPLOYED" if missing.
-            status: req.body.status || "DEPLOYED", 
-            workflowId: "WF-" + Date.now(),
-            applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
-        });
-        await newDeploy.save();
-        res.json(newDeploy);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        console.log("🔹 Internal Deploy Update:", req.body);
+        
+        // We use finding based on Terminal ID to ensure uniqueness
+        const filter = { terminalId: req.body.terminalId };
+
+        const updateDoc = {
+            $set: {
+                ...req.body, // Update Sim, AppId, Status, MerchantId
+                status: req.body.status || "DEPLOYED"
+            },
+            // Only generate these if it is a NEW record. 
+            // If updating, keep the old Workflow/App Number.
+            $setOnInsert: {
+                workflowId: "WF-" + Date.now(),
+                applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
+            }
+        };
+
+        const result = await DeployModel.findOneAndUpdate(
+            filter,
+            updateDoc,
+            { new: true, upsert: true } // Upsert = Update or Insert
+        );
+
+        res.json(result);
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
-// ... OTP Routes remain here ...
-
-// DYNAMIC ROUTES (MUST BE LAST)
+// 2. Dynamic Route (Device Trigger) - MUST BE LAST
 app.post('/:terminalSNo/deploy', async (req, res) => {
     try {
-        console.log(`🔹 Deploy Request: ${req.params.terminalSNo}`);
-        const newDeploy = new DeployModel({
-            ...req.body,
-            terminalId: req.params.terminalSNo,
-            // 2. Take status from API body. Default to "DEPLOYED" if missing.
-            status: req.body.status || "DEPLOYED", 
-            workflowId: req.body.workflowId || ("WF-" + Date.now()),
-            applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
-        });
-        await newDeploy.save();
-        res.json(newDeploy);
+        console.log(`🔹 Device Deploy Update: ${req.params.terminalSNo}`);
+        
+        // Force the Terminal ID from the URL to be the unique key
+        const filter = { terminalId: req.params.terminalSNo };
+
+        const updateDoc = {
+            $set: {
+                ...req.body,
+                terminalId: req.params.terminalSNo, // Ensure TID matches URL
+                status: req.body.status || "DEPLOYED"
+            },
+            $setOnInsert: {
+                workflowId: req.body.workflowId || ("WF-" + Date.now()),
+                applicationNumber: "APP-" + Math.floor(Math.random() * 1000)
+            }
+        };
+
+        const result = await DeployModel.findOneAndUpdate(
+            filter,
+            updateDoc,
+            { new: true, upsert: true }
+        );
+
+        res.json(result);
     } catch (e) {
         console.error("Deploy Error:", e);
         res.status(500).json({ error: e.message });
