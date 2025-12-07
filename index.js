@@ -250,12 +250,40 @@ app.post('/internal/otp/send', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==========================================
+// 2. DISPATCH OTP (Updated: Auto-Create if missing)
+// ==========================================
 app.post('/verification/:workflowId/dispatch', async (req, res) => {
     try {
-        const record = await VerificationModel.findOne({ workflowId: req.params.workflowId });
-        if (record) res.json({ otp: record.otp, status: "SENT" });
-        else res.status(404).json({ error: "Workflow Not Found" });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        const wfId = req.params.workflowId;
+        console.log(`🔹 Dispatch Request for: ${wfId}`);
+
+        // 1. Try to find existing OTP record
+        let record = await VerificationModel.findOne({ workflowId: wfId });
+
+        // 2. If NOT found, Auto-Generate it (Lazy Creation)
+        if (!record) {
+            console.log(`⚠️ No OTP found for ${wfId}. Auto-generating...`);
+            
+            const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
+            
+            record = new VerificationModel({
+                workflowId: wfId,
+                otp: randomOtp,
+                isVerified: false
+            });
+            
+            await record.save();
+            console.log(`✅ Auto-generated OTP: ${randomOtp}`);
+        }
+
+        // 3. Return the OTP
+        res.json({ otp: record.otp, status: "SENT" });
+
+    } catch (e) {
+        console.error("Dispatch Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/internal/otp/verify', async (req, res) => {
